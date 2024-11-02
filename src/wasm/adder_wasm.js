@@ -1,3 +1,4 @@
+
 var $MODULE_NAME = (() => {
   var _scriptName = import.meta.url;
   
@@ -199,6 +200,28 @@ if (typeof WebAssembly != 'object') {
   err('no native wasm support detected');
 }
 
+// include: base64Utils.js
+// Converts a string of base64 into a byte array (Uint8Array).
+function intArrayFromBase64(s) {
+
+  var decoded = atob(s);
+  var bytes = new Uint8Array(decoded.length);
+  for (var i = 0 ; i < decoded.length ; ++i) {
+    bytes[i] = decoded.charCodeAt(i);
+  }
+  return bytes;
+}
+
+// If filename is a base64 data URI, parses and returns data (Buffer on node,
+// Uint8Array otherwise). If filename is not a base64 data URI, returns undefined.
+function tryParseAsDataURI(filename) {
+  if (!isDataURI(filename)) {
+    return;
+  }
+
+  return intArrayFromBase64(filename.slice(dataURIPrefix.length));
+}
+// end include: base64Utils.js
 // Wasm globals
 
 var wasmMemory;
@@ -550,17 +573,8 @@ function createExportWrapper(name, nargs) {
 // include: runtime_exceptions.js
 // end include: runtime_exceptions.js
 function findWasmBinary() {
-  if (Module['locateFile']) {
-    var f = 'adder_wasm.wasm';
-    if (!isDataURI(f)) {
-      return locateFile(f);
-    } 
+    var f = 'data:application/octet-stream;base64,AGFzbQEAAAABJQdgAAF/YAF/AGAAAGABfwF/YAJ/fwF/YAN/f38Bf2ADf35/AX4DExICBAEAAgAAAAEBAAIDAQMBAwAEBQFwAQEBBQYBAYICggIGFwR/AUGAgAQLfwFBAAt/AUEAC38BQQALB4sCDAZtZW1vcnkCABFfX3dhc21fY2FsbF9jdG9ycwAABWFkZGVyAAEZX19pbmRpcmVjdF9mdW5jdGlvbl90YWJsZQEABmZmbHVzaAAOFWVtc2NyaXB0ZW5fc3RhY2tfaW5pdAAEGWVtc2NyaXB0ZW5fc3RhY2tfZ2V0X2ZyZWUABRllbXNjcmlwdGVuX3N0YWNrX2dldF9iYXNlAAYYZW1zY3JpcHRlbl9zdGFja19nZXRfZW5kAAcZX2Vtc2NyaXB0ZW5fc3RhY2tfcmVzdG9yZQAPF19lbXNjcmlwdGVuX3N0YWNrX2FsbG9jABAcZW1zY3JpcHRlbl9zdGFja19nZXRfY3VycmVudAARCvUDEgQAEAQLOQEGfyMAIQJBECEDIAIgA2shBCAEIAA2AgwgBCABNgIIIAQoAgwhBSAEKAIIIQYgBSAGaiEHIAcPCwYAIAAkAQsEACMBCxIAQYCABCQDQQBBD2pBcHEkAgsHACMAIwJrCwQAIwMLBAAjAgsCAAsCAAsMAEGAgAQQCEGEgAQLCABBgIAEEAkLBABBAQsCAAu/AgEDfwJAIAANAEEAIQECQEEAKAKIgARFDQBBACgCiIAEEA4hAQsCQEEAKAKIgARFDQBBACgCiIAEEA4gAXIhAQsCQBAKKAIAIgBFDQADQAJAAkAgACgCTEEATg0AQQEhAgwBCyAAEAxFIQILAkAgACgCFCAAKAIcRg0AIAAQDiABciEBCwJAIAINACAAEA0LIAAoAjgiAA0ACwsQCyABDwsCQAJAIAAoAkxBAE4NAEEBIQIMAQsgABAMRSECCwJAAkACQCAAKAIUIAAoAhxGDQAgAEEAQQAgACgCJBEFABogACgCFA0AQX8hASACRQ0BDAILAkAgACgCBCIBIAAoAggiA0YNACAAIAEgA2usQQEgACgCKBEGABoLQQAhASAAQQA2AhwgAEIANwMQIABCADcCBCACDQELIAAQDQsgAQsGACAAJAALEgECfyMAIABrQXBxIgEkACABCwQAIwAL';
     return f;
-  }
-  // Use bundler-friendly `new URL(..., import.meta.url)` pattern; works in browsers too.
-
-  
-  return new URL('adder_wasm.wasm', import.meta.url).href;
 }
 
 var wasmBinaryFile;
@@ -569,6 +583,10 @@ function getBinarySync(file) {
   if (file == wasmBinaryFile && wasmBinary) {
     return new Uint8Array(wasmBinary);
   }
+  var binary = tryParseAsDataURI(file);
+  if (binary) {
+    return binary;
+  }
   if (readBinary) {
     return readBinary(file);
   }
@@ -576,16 +594,6 @@ function getBinarySync(file) {
 }
 
 function getBinaryPromise(binaryFile) {
-  // If we don't have the binary yet, load it asynchronously using readAsync.
-  if (!wasmBinary
-      ) {
-    // Fetch the binary using readAsync
-    return readAsync(binaryFile).then(
-      (response) => new Uint8Array(/** @type{!ArrayBuffer} */(response)),
-      // Fall back to getBinarySync if readAsync fails
-      () => getBinarySync(binaryFile)
-    );
-  }
 
   // Otherwise, getBinarySync should be able to get it synchronously
   return Promise.resolve().then(() => getBinarySync(binaryFile));
@@ -606,29 +614,6 @@ function instantiateArrayBuffer(binaryFile, imports, receiver) {
 }
 
 function instantiateAsync(binary, binaryFile, imports, callback) {
-  if (!binary &&
-      typeof WebAssembly.instantiateStreaming == 'function' &&
-      !isDataURI(binaryFile) &&
-      typeof fetch == 'function') {
-    return fetch(binaryFile, { credentials: 'same-origin' }).then((response) => {
-      // Suppress closure warning here since the upstream definition for
-      // instantiateStreaming only allows Promise<Repsponse> rather than
-      // an actual Response.
-      // TODO(https://github.com/google/closure-compiler/pull/3913): Remove if/when upstream closure is fixed.
-      /** @suppress {checkTypes} */
-      var result = WebAssembly.instantiateStreaming(response, imports);
-
-      return result.then(
-        callback,
-        function(reason) {
-          // We expect the most common failure cause to be a bad MIME type for the binary,
-          // in which case falling back to ArrayBuffer instantiation should work.
-          err(`wasm streaming compile failed: ${reason}`);
-          err('falling back to ArrayBuffer instantiation');
-          return instantiateArrayBuffer(binaryFile, imports, callback);
-        });
-    });
-  }
   return instantiateArrayBuffer(binaryFile, imports, callback);
 }
 
@@ -643,8 +628,6 @@ function getWasmImports() {
 // Create the wasm instance.
 // Receives the wasm imports, returns the exports.
 function createWasm() {
-
-  console.log('createWASM')
   var info = getWasmImports();
   // Load the wasm module and create an instance of using native support in the JS engine.
   // handle a generated wasm instance, receiving its exports and
@@ -1140,6 +1123,8 @@ var unexportedSymbols = [
   'wasmExports',
   'writeStackCookie',
   'checkStackCookie',
+  'intArrayFromBase64',
+  'tryParseAsDataURI',
   'stackSave',
   'stackRestore',
   'ptrToString',

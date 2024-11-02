@@ -23,7 +23,6 @@ export default function Home() {
     async function loadWasm() {
       if (typeof window !== "undefined") {
         WebAssembly.wrapper = await import("../wasm/adder_wasm.js");
-        WebAssembly.binary = await fetch("/adder_wasm.wasm"); // connected to the /public folder 
         WebAssembly.instance = await WebAssembly.wrapper.default({
           locateFile: () => `/adder_wasm.wasm`,
         });
